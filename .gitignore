@@ -1,0 +1,5 @@
+dist/main
+dist/main.exe
+objs
+dist/SDL2.dll
+kit-libs-*
