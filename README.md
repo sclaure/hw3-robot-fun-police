@@ -2,7 +2,7 @@
 
 Robot Fun Police is Sergio Claure's implementation of [Robot Fun Police](http://graphics.cs.cmu.edu/courses/15-466-f17/game2-designs/jmccann/) for game2 in 15-466-f17.
 
-![Alt text](Screenshot.png?raw=true)
+![Alt text](screenshots/Screenshot.png?raw=true)
 
 ## Build Notes
 
