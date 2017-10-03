@@ -177,9 +177,11 @@ int main(int argc, char **argv) {
 
 
 	// our tree stack here is our robot arm
-	std::vector< Scene::Object * > tree_stack;
-	std::vector< Scene::Object * > balloons;
-	std::vector< Scene::Object * > pop_balloons;
+	std::vector< Scene::Object * > players;
+	Scene::Object *net;
+	Scene::Object *floor;
+	Scene::Object *ball;
+	std::vector< Scene::Object * > walls;
 
 
 	{ //read objects to add from "scene.blob":
@@ -207,60 +209,78 @@ int main(int argc, char **argv) {
 				}
 				std::string name(&strings[0] + entry.name_begin, &strings[0] + entry.name_end);
 
-				if (name == "Balloon1" ||
-					name == "Balloon2" ||
-					name == "Balloon3"){
-					balloons.emplace_back( &add_object(name, entry.position, entry.rotation, entry.scale) );
+				if (name == "Cube" ||
+					name == "Cube.001"){
+					players.emplace_back( &add_object(name, entry.position, entry.rotation, entry.scale) );
 				}
-				else if (name == "Base" ){
-					tree_stack.emplace_back( &add_object(name, entry.position, entry.rotation, entry.scale) );
+				else if (name == "Cube.002" ){
+					net = &add_object(name, entry.position, entry.rotation, entry.scale);
 				}
-				else if (name == "Link1"){
-					tree_stack.emplace_back( &add_object(name, glm::vec3(0.0f, 0.0f, 0.55f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), entry.scale) );
+				else if (name == "Plane"){
+					floor = &add_object(name, entry.position, entry.rotation, entry.scale);
 				}
-				else if (name == "Link2"){
-					tree_stack.emplace_back( &add_object(name, glm::vec3(0.0f, 0.0f, 1.1f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), entry.scale) );
+				else if (name == "Sphere"){
+					ball = &add_object(name, entry.position, entry.rotation, entry.scale);
 				}
-				else if (name == "Link3"){
-					tree_stack.emplace_back( &add_object(name, glm::vec3(0.0f, 0.0f, 1.2f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), entry.scale) );
-				}
-				else {
-					add_object(name, entry.position, entry.rotation, entry.scale);
+				else{
+					walls.emplace_back( &add_object(name, entry.position, entry.rotation, entry.scale) );
 				}
 			}
 		}
 	}
 
-	tree_stack.emplace_back( &add_object("Cube.001", glm::vec3(0.0f, 0.0f, 0.6f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.0f)) );
-
-	for (uint32_t i = 1; i < tree_stack.size(); ++i) {
-		tree_stack[i]->transform.set_parent(&tree_stack[i-1]->transform);
-	}
-
-	std::vector< float > wave_acc(tree_stack.size(), 0.0f);
-
 	glm::vec2 mouse = glm::vec2(0.0f, 0.0f); //mouse position in [-1,1]x[-1,1] coordinates
 
 	struct {
-		float radius = 10.0f;
-		float elevation = 0.0f;
+		float radius = 15.0f;
+		float elevation = 0.3f;
 		float azimuth = 0.0f;
 		glm::vec3 target = glm::vec3(0.0f, 0.0f, 0.0f);
 	} camera;
 
-	int count = 0;
-	float sign = 1.0f;
+	bool p1_right = false;
+	bool p1_left = false;
+	bool p2_right = false;
+	bool p2_left = false;
 
-	int pop_count1, pop_count2, pop_count3;
-	bool popped1, popped2, popped3;
+	bool p1_can_jump = true;
+	bool p2_can_jump = true;
+	bool p1_jumped = false;
+	bool p2_jumped = false;
 
-	popped1 = false;
-	popped2 = false;
-	popped3 = false;
+	float p1_c1_x, p1_c1_y;
+	float p1_c2_x, p1_c2_y;
+	float p2_c1_x, p2_c1_y;
+	float p2_c2_x, p2_c2_y;
+	float net_c_x, net_c_y;
 
-	pop_count1 = 0;
-	pop_count2 = 0;
-	pop_count3 = 0;
+	float ball_pos_x, ball_pos_y;
+	float distance;
+
+	//booleans to reduce unnecessary calculations
+	bool hit_corner = false;
+	bool hit_top = false;
+	bool hit_side = false;
+
+	//whole game may be 3d, but is bound by 2d controls
+	//x coordinates correspond to an objects y position
+	//y coordinates correspond to an objects z position 
+
+	//player 1 and 2 can only exert vertical velocity (horizontal velocity is fixed by the users)
+	float p1_vel_y = 0.0f;
+	float p2_vel_y = 0.0f;
+
+	float ball_vel_x = 0.0f;
+	float ball_vel_y = 0.0f;
+
+	float gravity = -10.0f;
+
+	int p1_score = 0;
+	int p2_score = 0;
+
+	bool game_over = false;
+
+	bool p1_touch_last = false;
 
 	//------------ game loop ------------
 
@@ -270,66 +290,14 @@ int main(int argc, char **argv) {
 		while (SDL_PollEvent(&evt) == 1) {
 			//handle input:
 			if (evt.type == SDL_MOUSEMOTION) {
-				glm::vec2 old_mouse = mouse;
+				/*glm::vec2 old_mouse = mouse;
 				mouse.x = (evt.motion.x + 0.5f) / float(config.size.x) * 2.0f - 1.0f;
 				mouse.y = (evt.motion.y + 0.5f) / float(config.size.y) *-2.0f + 1.0f;
 				if (evt.motion.state & SDL_BUTTON(SDL_BUTTON_LEFT)) {
 					camera.elevation += -2.0f * (mouse.y - old_mouse.y);
 					camera.azimuth += -2.0f * (mouse.x - old_mouse.x);
-				}
+				}*/
 			} else if (evt.type == SDL_MOUSEBUTTONDOWN) {
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_w) {
-				popped1 = true;
-				pop_balloons.emplace_back( &add_object("Balloon1-Pop", balloons[0]->transform.position, balloons[0]->transform.rotation, balloons[0]->transform.scale) );
-				balloons[0]->transform.scale = glm::vec3(0.0f);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_e) {
-				popped2 = true;
-				pop_balloons.emplace_back( &add_object("Balloon1-Pop", balloons[1]->transform.position, balloons[1]->transform.rotation, balloons[1]->transform.scale) );
-				balloons[1]->transform.scale = glm::vec3(0.0f);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_r) {
-				popped3 = true;
-				pop_balloons.emplace_back( &add_object("Balloon1-Pop", balloons[2]->transform.position, balloons[2]->transform.rotation, balloons[2]->transform.scale) );
-				balloons[2]->transform.scale = glm::vec3(0.0f);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_z) {
-				tree_stack[0]->transform.rotation *= glm::angleAxis(
-					0.02f * float(M_PI),
-					glm::vec3(0.0f, 0.0f, 1.0f)
-				);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_x) {
-				tree_stack[0]->transform.rotation *= glm::angleAxis(
-					0.02f * float(M_PI),
-					glm::vec3(0.0f, 0.0f, -1.0f)
-				);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_a) {
-				tree_stack[1]->transform.rotation *= glm::angleAxis(
-					0.005f * float(M_PI),
-					glm::vec3(1.0f, 0.0f, 0.0f)
-				);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_s) {
-				tree_stack[1]->transform.rotation *= glm::angleAxis(
-					0.005f * float(M_PI),
-					glm::vec3(-1.0f, 0.0f, 0.0f)
-				);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_SEMICOLON) {
-				tree_stack[2]->transform.rotation *= glm::angleAxis(
-					0.005f * float(M_PI),
-					glm::vec3(1.0f, 0.0f, 0.0f)
-				);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_QUOTE) {
-				tree_stack[2]->transform.rotation *= glm::angleAxis(
-					0.005f * float(M_PI),
-					glm::vec3(-1.0f, 0.0f, 0.0f)
-				);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_PERIOD) {
-				tree_stack[3]->transform.rotation *= glm::angleAxis(
-					0.005f * float(M_PI),
-					glm::vec3(1.0f, 0.0f, 0.0f)
-				);
-			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_SLASH) {
-				tree_stack[3]->transform.rotation *= glm::angleAxis(
-					0.005f * float(M_PI),
-					glm::vec3(-1.0f, 0.0f, 0.0f)
-				);
 			} else if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_ESCAPE) {
 				should_quit = true;
 			} else if (evt.type == SDL_QUIT) {
@@ -339,75 +307,419 @@ int main(int argc, char **argv) {
 		}
 		if (should_quit) break;
 
+		// record a snapshot of the keyboard state
+		const Uint8 *state = SDL_GetKeyboardState(NULL);
+		if (state[SDL_SCANCODE_A]) {
+			if (players[0]->transform.position[1] > -9.5f){
+		    	players[0]->transform.position[1] -= 0.1f;
+		    	p1_left = true;
+		    }
+		    p1_left = false;
+		} else {
+			p1_left = false;
+		}
+		if (state[SDL_SCANCODE_D]) {
+			if (players[0]->transform.position[1] < -0.55f){
+		    	players[0]->transform.position[1] += 0.1f; 
+		    	p1_right = true;
+		    }
+		    p1_right = false;
+		} else {
+			p1_right = false;
+		}
+		if (state[SDL_SCANCODE_W]) {
+			if (p1_can_jump){
+		    	p1_vel_y = 6.0f;
+		    	p1_can_jump = false;
+		    	p1_jumped = true;
+		    }
+		}
+		if (state[SDL_SCANCODE_LEFT]) {
+			if (players[1]->transform.position[1] > 0.55f){
+		    	players[1]->transform.position[1] -= 0.1f; 
+		    	p2_left = true;
+		    }
+		    p2_left = false;
+		} else {
+			p2_left = false;
+		}
+		if (state[SDL_SCANCODE_RIGHT]) {
+			if (players[1]->transform.position[1] < 9.5f){
+		    	players[1]->transform.position[1] += 0.1f; 
+		    	p2_right = true;
+			}
+			p2_right = false;
+		} else {
+			p2_right = false;
+		}
+		if (state[SDL_SCANCODE_UP]) {
+			if (p2_can_jump){
+		    	p2_vel_y = 6.0f;
+		    	p2_can_jump = false;
+		    	p2_jumped = true;
+		    }
+		}
+
 		//collision detection calculations
 
-		/*glm::vec3 origin = tree_stack[4]->transform.position;
-		glm::quat orig_q = glm::quat(origin[0], origin[1], origin[2], 0.0f);
-
-		glm::quat cumulative = tree_stack[0]->transform.rotation;
-
-		for (uint32_t i = 0; i < tree_stack.size() - 1; ++i) {
-			cumulative *= tree_stack[i+1]->transform.rotation;
-		}
-
-		glm::quat cumul_conj = conjugate(tree_stack[0]->transform.rotation);
-
-		for (uint32_t i = 0; i < tree_stack.size() - 1; ++i) {
-			cumul_conj = conjugate(tree_stack[i+1]->transform.rotation) * cumul_conj;
-		}
-		
-		glm::quat new_q = cumulative * orig_q * cumul_conj;
-
-		glm::vec3 collider_pos = glm::vec3(new_q[0], new_q[1], new_q[2]);*/
-
 		{ //update game state:
-			//update balloons:
-			/*float dist_sq;
-			float dist;*/
-			for (uint32_t i = 0; i < balloons.size(); ++i) {
-				balloons[i]->transform.position += glm::vec3(0.0f, 0.0f, sign * 0.01f);
+			//update player 1 (divide calculations by framerate, i.e. 60fps)
+			//don't let the player fall through the floor
+			if ((players[0]->transform.position[2] != 0.5f) || p1_jumped){
+				players[0]->transform.position[2] += (p1_vel_y / 60.0f);
+
+				//if the player reached the floor, reset velocity and z position
+				if (players[0]->transform.position[2] <= 0.5f){
+					players[0]->transform.position[2] = 0.5f;
+					p1_vel_y = 0.0f;
+					p1_can_jump = true;
+				}
+
+				p1_jumped = false;
+			}
+
+			//update player 2 (divide calculations by framerate, i.e. 60fps)
+			//don't let the player fall through the floor
+			if ((players[1]->transform.position[2] != 0.5f) || p2_jumped){
+				players[1]->transform.position[2] += (p2_vel_y / 60.0f);
+
+				//if the player reached the floor, reset velocity and z position
+				if (players[1]->transform.position[2] <= 0.5f){
+					players[1]->transform.position[2] = 0.5f;
+					p2_vel_y = 0.0f;
+					p2_can_jump = true;
+				}
+
+				p2_jumped = false;
+			}
+
+			//update ball's velocity
+			ball->transform.position[2] += (ball_vel_y / 60.0f);
+			ball->transform.position[1] += (ball_vel_x / 60.0f);
+
+			//if the ball reached the left wall, reverse the x direction
+			if (ball->transform.position[1] <= -9.15f){
+				ball->transform.position[1] = -9.15f;
+				ball_vel_x *= -1.0f;
+			}
+
+			//if the ball reached the right wall, reverse the x direction
+			if (ball->transform.position[1] >= 9.15f){
+				ball->transform.position[1] = 9.15f;
+				ball_vel_x *= -1.0f;
+			}
 
 
-				//check for pops (couldn't get working)
+			//grab ball position
+			ball_pos_x = ball->transform.position[1];
+			ball_pos_y = ball->transform.position[2];
 
-				/*glm::vec3 diff = collider_pos - balloons[i]->transform.position;
-				dist_sq = diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2];
-				dist = sqrt(dist_sq);
+			hit_corner = false;
+
+			/*check if the ball hits one of the corners of a player first*/
+			//player 1 corners
+			p1_c1_x = players[0]->transform.position[1] - 0.5f;
+			p1_c1_y = players[0]->transform.position[2] + 0.5f;
+
+			distance = sqrt(pow((ball_pos_x - p1_c1_x),2) + pow((ball_pos_y - p1_c1_y),2));
+
+			if ((distance <= 0.35f) && !hit_corner){
+				hit_corner = true;
+				ball_vel_y = 8.0f;
+				ball_vel_x -= 1.5f;
+				ball_vel_x += -1.0f * p1_left;
+				ball_vel_x += 1.0f * p1_right;
+
+				p1_touch_last = true;
+			}
+
+			p1_c2_x = players[0]->transform.position[1] + 0.5f;
+			p1_c2_y = players[0]->transform.position[2] + 0.5f;
+
+			distance = sqrt(pow((ball_pos_x - p1_c2_x),2) + pow((ball_pos_y - p1_c2_y),2));
+
+			if ((distance <= 0.35f) && !hit_corner){
+				hit_corner = true;
+				ball_vel_y = 8.0f;
+				ball_vel_x += 1.5f;
+				ball_vel_x += -1.0f * p1_left;
+				ball_vel_x += 1.0f * p1_right;
+
+				p1_touch_last = true;
+			}
+
+			//player 2 corners
+			p2_c1_x = players[1]->transform.position[1] - 0.5f;
+			p2_c1_y = players[1]->transform.position[2] + 0.5f;
+
+			distance = sqrt(pow((ball_pos_x - p2_c1_x),2) + pow((ball_pos_y - p2_c1_y),2));
+
+			if ((distance <= 0.35f) && !hit_corner){
+				hit_corner = true;
+				ball_vel_y = 8.0f;
+				ball_vel_x -= 1.5f;
+				ball_vel_x += -1.0f * p2_left;
+				ball_vel_x += 1.0f * p2_right;
+
+				p1_touch_last = false;
+			}
+
+			p2_c2_x = players[1]->transform.position[1] + 0.5f;
+			p2_c2_y = players[1]->transform.position[2] + 0.5f;
+
+			distance = sqrt(pow((ball_pos_x - p2_c2_x),2) + pow((ball_pos_y - p2_c2_y),2));
+
+			if ((distance <= 0.35f) && !hit_corner){
+				hit_corner = true;
+				ball_vel_y = 8.0f;
+				ball_vel_x += 1.5f;
+				ball_vel_x += -1.0f * p2_left;
+				ball_vel_x += 1.0f * p2_right;
+
+				p1_touch_last = false;
+			}
+
+			hit_top = false;
+
+			//if the ball has hit player 1's head, bounce the ball upward
+			if ((ball->transform.position[2] <= (players[0]->transform.position[2] + 0.5f)) &&
+				(ball->transform.position[2] >= (players[0]->transform.position[2] + 0.25f)) &&
+				(ball->transform.position[1] <= (players[0]->transform.position[1] + 0.5f)) &&
+				(ball->transform.position[1] >= (players[0]->transform.position[1] - 0.5f)) &&
+				!hit_corner && !hit_top){
+
+				ball->transform.position[2] = players[0]->transform.position[2] + 0.85f;
+				ball_vel_y = 8.0f;
+				ball_vel_x += -1.0f * p1_left;
+				ball_vel_x += 1.0f * p1_right;
+
+				p1_touch_last = true;
+
+				hit_top = true;
+			}	
+
+
+			//if the ball has hit player 2's head, bounce the ball upward
+			if ((ball->transform.position[2] <= (players[1]->transform.position[2] + 0.5f)) &&
+				(ball->transform.position[2] >= (players[1]->transform.position[2] + 0.25f)) &&
+				(ball->transform.position[1] <= (players[1]->transform.position[1] + 0.5f)) &&
+				(ball->transform.position[1] >= (players[1]->transform.position[1] - 0.5f)) &&
+				!hit_corner && !hit_top){
+
+				ball->transform.position[2] = players[1]->transform.position[2] + 0.85f;
+				ball_vel_y = 8.0f;
+				ball_vel_x += -1.0f * p2_left;
+				ball_vel_x += 1.0f * p2_right;
+
+				p1_touch_last = false;
+
+				hit_top = true;
+			}
+
+			hit_side = false;
+
+			//if the ball has hit player 1's left wall, bounce the ball to the left
+			if ((ball->transform.position[2] <= (players[0]->transform.position[2] + 0.5f)) &&
+				(ball->transform.position[2] >= (players[0]->transform.position[2] - 0.5f)) &&
+				(ball->transform.position[1] <= (players[0]->transform.position[1] - 0.4f)) &&
+				(ball->transform.position[1] >= (players[0]->transform.position[1] - 0.85f)) &&
+				!hit_corner && !hit_top && !hit_side){
+
+				ball->transform.position[1] = players[0]->transform.position[1] - 0.85f;
+
+				if (ball_vel_x >= 0.0){
+					ball_vel_x *= -1.0f;
+				}
+
+				p1_touch_last = true;
+
+				hit_side = true;
+			}	
+
+			//if the ball has hit player 1's right wall, bounce the ball to the right
+			if ((ball->transform.position[2] <= (players[0]->transform.position[2] + 0.5f)) &&
+				(ball->transform.position[2] >= (players[0]->transform.position[2] - 0.5f)) &&
+				(ball->transform.position[1] >= (players[0]->transform.position[1] + 0.4f)) &&
+				(ball->transform.position[1] <= (players[0]->transform.position[1] + 0.85f)) &&
+				!hit_corner && !hit_top && !hit_side){
+
+				ball->transform.position[1] = players[0]->transform.position[1] + 0.85f;
 				
-				if (dist < balloons[i]->transform.scale[0]){
-					printf("true\n");
-					balloons[i]->transform.scale = glm::vec3(0.0f);
-				}*/
+				if (ball_vel_x <= 0.0){
+					ball_vel_x *= -1.0f;
+				}
+
+				p1_touch_last = true;
+
+				hit_side = true;
+			}	
+
+			//if the ball has hit player 2's left wall, bounce the ball to the left
+			if ((ball->transform.position[2] <= (players[1]->transform.position[2] + 0.5f)) &&
+				(ball->transform.position[2] >= (players[1]->transform.position[2] - 0.5f)) &&
+				(ball->transform.position[1] <= (players[1]->transform.position[1] - 0.4f)) &&
+				(ball->transform.position[1] >= (players[1]->transform.position[1] - 0.85f)) &&
+				!hit_corner && !hit_top && !hit_side){
+
+				ball->transform.position[1] = players[1]->transform.position[1] - 0.85f;
+				
+				if (ball_vel_x >= 0.0){
+					ball_vel_x *= -1.0f;
+				}
+
+				p1_touch_last = false;
+
+				hit_side = true;
 			}
 
-			count += 1;
-			if (count == 200){
-				sign *= -1.0f;
-				count = 0;
+			//if the ball has hit player 2's left wall, bounce the ball to the left
+			if ((ball->transform.position[2] <= (players[1]->transform.position[2] + 0.5f)) &&
+				(ball->transform.position[2] >= (players[1]->transform.position[2] - 0.5f)) &&
+				(ball->transform.position[1] >= (players[1]->transform.position[1] + 0.4f)) &&
+				(ball->transform.position[1] <= (players[1]->transform.position[1] + 0.85f)) &&
+				!hit_corner && !hit_top && !hit_side){
+
+				ball->transform.position[1] = players[1]->transform.position[1] + 0.85f;
+				
+				if (ball_vel_x <= 0.0){
+					ball_vel_x *= -1.0f;
+				}
+
+				p1_touch_last = false;
+
+				hit_side = true;
+			}		
+
+			//check if the ball has hit the net
+
+			/*check if the ball hits the top of the net first*/
+			//player 1 corners
+			net_c_x = net->transform.position[1] - 0.5f;
+			net_c_y = net->transform.position[2] + 0.5f;
+
+			distance = sqrt(pow((ball_pos_x - net_c_x),2) + pow((ball_pos_y - net_c_y),2));
+
+			if (distance <= 0.35f){
+				ball->transform.position[1] = players[0]->transform.position[1];
+				ball->transform.position[2] = 4.0f;
+				ball_vel_y = 0.0f;
+				ball_vel_x = 0.0f;
+
+				if (p1_touch_last){
+					p2_score += 1;
+				} else {
+					p1_score += 1;
+				}
+
+				printf("Current Score: p1 %i | p2 %i\n", p1_score, p2_score);
+
+				if ((p1_score == 10) || (p2_score == 10)){
+					printf("GAME OVER: ");
+					if (p1_score == 10){
+						printf("Player1 wins!\n");
+					} else {
+						printf("Player2 wins!\n");
+					}
+					game_over = true;
+				}
 			}
 
-			if ((popped1) && (pop_count1 < 5)){
-				pop_count1 += 1;
-				if (pop_count1 >= 5){
-					popped1 = false;
-					pop_balloons[0]->transform.scale = glm::vec3(0.0f);
+
+			//if the ball has hit the net's left wall, reset the ball
+			if ((ball->transform.position[2] <= (net->transform.position[2] + 1.0f)) &&
+				(ball->transform.position[1] <= (net->transform.position[1] - 0.0f)) &&
+				(ball->transform.position[1] >= (net->transform.position[1] - 0.40f))){
+
+				ball->transform.position[1] = players[0]->transform.position[1];
+				ball->transform.position[2] = 4.0f;
+				ball_vel_y = 0.0f;
+				ball_vel_x = 0.0f;
+
+				if (p1_touch_last){
+					p2_score += 1;
+				} else {
+					p1_score += 1;
 				}
-			}
-			if ((popped2) && (pop_count2 < 5)){
-				pop_count2 += 1;
-				if (pop_count2 >= 5){
-					popped2 = false;
-					pop_balloons[1]->transform.scale = glm::vec3(0.0f);
-				}
-			}
-			if ((popped3) && (pop_count3 < 5)){
-				pop_count3 += 1;
-				if (pop_count3 >= 5){
-					popped3 = false;
-					pop_balloons[2]->transform.scale = glm::vec3(0.0f);
+
+				printf("Current Score: p1 %i | p2 %i\n", p1_score, p2_score);
+
+				if ((p1_score == 10) || (p2_score == 10)){
+					printf("GAME OVER: ");
+					if (p1_score == 10){
+						printf("Player1 wins!\n");
+					} else {
+						printf("Player2 wins!\n");
+					}
+					game_over = true;
 				}
 			}
 
+			//if the ball has hit the net's left wall, bounce the ball to the left
+			if ((ball->transform.position[2] <= (net->transform.position[2] + 1.0f)) &&
+				(ball->transform.position[1] >= (net->transform.position[1] + 0.0f)) &&
+				(ball->transform.position[1] <= (net->transform.position[1] + 0.40f))){
+
+				ball->transform.position[1] = players[0]->transform.position[1];
+				ball->transform.position[2] = 4.0f;
+				ball_vel_y = 0.0f;
+				ball_vel_x = 0.0f;
+
+				if (p1_touch_last){
+					p2_score += 1;
+				} else {
+					p1_score += 1;
+				}
+
+				printf("Current Score: p1 %i | p2 %i\n", p1_score, p2_score);
+
+				if ((p1_score == 10) || (p2_score == 10)){
+					printf("GAME OVER: ");
+					if (p1_score == 10){
+						printf("Player1 wins!\n");
+					} else {
+						printf("Player2 wins!\n");
+					}
+					game_over = true;
+				}
+			}	
+
+			//if the ball reached the floor, reset velocity and z position
+			if (ball->transform.position[2] <= 0.35f){
+				if (ball->transform.position[1] >= 0){
+					p1_score += 1;
+				} else {
+					p2_score += 1;
+				}
+
+				printf("Current Score: p1 %i | p2 %i\n", p1_score, p2_score);
+
+				if ((p1_score == 10) || (p2_score == 10)){
+					printf("GAME OVER: ");
+					if (p1_score == 10){
+						printf("Player1 wins!\n");
+					} else {
+						printf("Player2 wins!\n");
+					}
+					game_over = true;
+				}
+
+				ball->transform.position[1] = players[0]->transform.position[1];
+				ball->transform.position[2] = 4.0f;
+				ball_vel_y = 0.0f;
+				ball_vel_x = 0.0f;
+			}
+
+			//apply gravity to velocities
+			//don't apply gravity when the players are on the floor
+			if (players[0]->transform.position[2] != 0.5f){
+				p1_vel_y += (gravity / 60.0f);
+			}
+			if (players[1]->transform.position[2] != 0.5f){
+				p2_vel_y += (gravity / 60.0f);
+			}
+			if (!game_over){
+				ball_vel_y += (gravity / 60.0f);
+			}
 
 			//camera:
 			scene.camera.transform.position = camera.radius * glm::vec3(
